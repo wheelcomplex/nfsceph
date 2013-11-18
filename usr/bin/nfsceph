@@ -1,0 +1,25 @@
+#!/bin/bash
+
+# config file
+CONFIG=/etc/sysconfig/nfsceph
+BIN=/usr/bin/nfscephbin
+
+if [ ! -f "$CONFIG" ]; then
+    echo "Error: cannot find config file" 
+    exit 1;
+fi
+
+if [ ! -f "$BIN" ]; then
+    echo "Error: cannot find nfsceph binary at $BIN"
+    exit 2
+fi
+
+# source config file
+. "$CONFIG"
+export NFSCEPH_POOL=$POOL
+export NFSCEPH_USER=$USER
+export NFSCEPH_KEYRING=$KEYRING
+export NFSCEPH_MOUNT=$MOUNT
+export NFSCEPH_EXPORTS=$EXPORTS
+
+$BIN $@

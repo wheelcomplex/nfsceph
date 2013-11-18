@@ -1,0 +1,19 @@
+# ceph pool
+POOL="userfs";
+
+# ceph user
+USER="nfs";
+
+# ceph keyfile
+KEYRING="/etc/ceph/ceph.keyring";
+
+# mountpoint for exports
+MOUNT="/export";
+
+# exports config file
+EXPORTS="/etc/sysconfig/nfsceph-exports"
+
+# save exports config when nfsceph stops
+# if this is set to no, you can save it by
+#  nfsceph export > /etc/sysconfig/nfsceph-exports
+SAVE_CONFIG="no"

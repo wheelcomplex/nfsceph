@@ -1,0 +1,326 @@
+#!/usr/bin/perl
+
+use strict;
+
+use Data::Dumper;
+use JSON;
+
+##########
+# CONFIG #
+##########
+# ceph pool
+my $POOL = $ENV{'NFSCEPH_POOL'} || "userfs";
+# ceph user
+my $USER = $ENV{'NFSCEPH_USER'} || "nfs";
+# ceph keyfile
+my $KEYRING = $ENV{'NFSCEPH_KEYRING'} || "/etc/ceph/ceph.keyring";
+# exports will be mounted here
+my $MOUNT = $ENV{'NFSCEPH_MOUNT'} || "/export";
+# export config
+my $EXPORTS = $ENV{'NFSCEPH_EXPORTS'} || "/etc/sysconfig/nfsceph-exports";
+
+if ($#ARGV < 0) { help(); }
+
+my $command = shift;
+
+if ($command eq "create") {
+    my $name = shift;
+    my $size = shift;
+    if (defined($name) && defined($size)) {
+        create($name, $size);
+    }
+    else {
+        print "Error: $0 create <name> <size>\n";
+    }
+}
+elsif ($command eq "delete") {
+    my $name = shift;
+    if (defined($name)) {
+        remove($name);
+    }
+    else {
+        print "Error: $0 delete <name>\n";
+    }
+}
+elsif ($command eq "export") {
+    my $o = shift;
+    if ($o eq "-a") {
+        exportall();
+    }
+    else {
+        my $name = $o;
+        my $ip = shift;
+        export($name, $ip);
+    }
+}
+elsif ($command eq "unexport") {
+    my $name = shift;
+    my $ip = shift;
+    unexport($name, $ip);
+}
+elsif ($command eq "exportall") {
+    exportall();
+}
+elsif ($command eq "unexportall") {
+    unexportall();
+}
+elsif ($command eq "mountall") {
+    mountall();
+}
+elsif ($command eq "umountall") {
+    umountall();
+}
+elsif ($command eq "list") {
+    list();
+}
+else {
+    help();
+}
+
+# return 1 if rbd exists
+sub rbd_exists {
+    my $name = shift;
+    my $rbds = decode_json(`rbd --format json --pool $POOL --id $USER --keyring $KEYRING ls`);
+    foreach my $rbd (@{$rbds}) {
+        if ($name eq $rbd) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+# returns a device mapped to rbd
+sub getmapped {
+    my $name = shift;
+    my $rbds = decode_json(`rbd --format json --pool $POOL --id $USER --keyring $KEYRING showmapped`);
+    foreach my $rbd (values %{$rbds}) {
+        if ($name eq $rbd->{'name'}) {
+            return $rbd->{'device'};
+        }
+    }
+    return undef;
+}
+
+
+sub list {
+    my $ls = decode_json(`rbd --format json --pool $POOL --id $USER --keyring $KEYRING ls -l`);
+    #print Dumper $ls;
+    my $showmapped = decode_json(`rbd --format json --pool $POOL --id $USER --keyring $KEYRING showmapped`);
+    #print Dumper $showmapped;
+
+    foreach my $rbd (@{$ls}) {
+        #print Dumper $rbd;
+        my $name = $rbd->{'image'};
+        my $size = $rbd->{'size'};
+        $size = $size/1000000; # size is in bytes by default, which is so small
+        my $u = "MB";
+        if ($size > 1000000000) { $size = $size / 1000000000; $u = "PB"; }
+        elsif ($size > 1000000) { $size = $size / 1000000; $u = "TB"; }
+        elsif ($size > 1000) { $size = $size / 1000; $u = "GB"; }
+        printf ("%-20s %s $u\n",$name,$size);
+    }
+    return 0;
+
+}
+
+sub create {
+    my $name = shift;
+    my $size = shift;
+
+    if (rbd_exists($name)) {
+        print "Error! rbd $name already exists.\n";
+        exit;
+    }
+
+    print "Creating rbd... ";
+    system("rbd --pool $POOL --id $USER --keyring $KEYRING create --size $size $name");
+    if ($? == 0) { print "Success.\n"; }
+    else { print "Error.\n"; exit 1; }
+
+
+    print "Mapping rbd...";
+    system("rbd --pool $POOL --id $USER --keyring $KEYRING map $name");
+    if ($? == 0) { print "Success.\n"; }
+    else { print "Error.\n"; exit 1; }
+
+    print "Making filesystem...";
+    my $device = getmapped($name);
+    system("mkfs.ext3 $device");
+    if ($? == 0) { print "Success.\n"; }
+    else { print "Error.\n"; exit 1; }
+
+    print "Mounting filesystem...";
+    mkdir ("$MOUNT/$name");
+    system("mount $device $MOUNT/$name");
+    if ($? == 0) { print "Success.\n"; }
+    else { print "Error.\n"; exit 1; }
+}
+
+sub remove {
+    my $name = shift;
+
+    my $print = _export_print($name);
+    if (defined($print)) { print "Error! $name is still exported. Unexport resources before deleting.\n"; print $print; exit 3; }
+
+    if (! rbd_exists($name)) {
+        print "Error! rbd $name does not exist.\n";
+        exit 1;
+    }
+    my $device = getmapped($name);
+
+    if (!defined($device)) {
+        print "Error! rbd $name does not have a mapped device.\n";
+        print "Please delete rbd manually. See man rdb for more help.\n";
+        exit 1;
+    }
+
+    print "Unmounting filesystem...";
+    system("umount $MOUNT/$name");
+    rmdir("$MOUNT/$name");
+    if ($? == 0) { print "Success.\n"; }
+    else { print "Error.\n"; exit 1; }
+
+    print "Unmapping rbd... ";
+    system("rbd --pool $POOL --id $USER --keyring $KEYRING unmap $device");
+    if ($? == 0) { print "Success.\n"; }
+    else { print "Error.\n"; exit 1; }
+
+    print "Deleting rbd... ";
+    system("rbd --pool $POOL --id $USER --keyring $KEYRING rm $name");
+    if ($? == 0) { print "Success.\n"; }
+    else { print "Error.\n"; exit 1; }
+}
+
+# adds an export if given $ip, print out list of exports if not
+sub export {
+    my $name = shift;
+    my $ip = shift;
+    if (!defined($ip)) {
+        print _export_print($name);
+        return;
+    }
+    system "exportfs -o rw,async,no_root_squash $ip:/export/$name";
+}
+
+
+# removes an export
+sub unexport {
+    my $name = shift;
+    my $ip = shift;
+    if (!defined($ip) || !defined($name)) { help(); exit 3; }
+    system "exportfs -u $ip:/export/$name";
+}
+
+sub exportall {
+    open(FILE, "< $EXPORTS");
+    my @lines = <FILE>;
+    foreach my $line (@lines) {
+        my @vs = split(' ',$line);
+        my $name = @vs[0];
+        my $ip = @vs[1];
+        print "Exporting $name... ";
+        system "exportfs -o rw,async,no_root_squash $ip:/export/$name\n";
+        if ($? == 0) { print "Success.\n"; }
+        else { print "Error.\n"; }
+    }
+    close(FILE);
+}
+
+sub unexportall {
+    open(FILE, "< $EXPORTS");
+    my @lines = <FILE>;
+    foreach my $line (@lines) {
+        my @vs = split(' ',$line);
+        my $name = @vs[0];
+        my $ip = @vs[1];
+        print "Unexporting $name... ";
+        system "exportfs -u $ip:/export/$name\n";
+        if ($? == 0) { print "Success.\n"; }
+        else { print "Error.\n"; }
+    }
+    close(FILE);
+}
+
+sub mountall {
+    my $ls = decode_json(`rbd --format json --pool $POOL --id $USER --keyring $KEYRING ls`);
+    foreach my $name (@{$ls}) {
+        system("rbd --pool $POOL --id $USER --keyring $KEYRING map $name");
+        my $device = getmapped($name);
+        system("mount $device $MOUNT/$name");
+    }
+}
+
+sub umountall {
+    my $ls = decode_json(`rbd --format json --pool $POOL --id $USER --keyring $KEYRING ls`);
+    foreach my $name (@{$ls}) {
+        my $device = getmapped($name);
+        system("umount $device");
+        system("rbd --pool $POOL --id $USER --keyring $KEYRING unmap $device");
+    }
+}
+    
+# helper function to print out a list of exports 
+sub _export_print {
+    my $rbd = shift;
+    open(FILE, "< /var/lib/nfs/etab");
+    my @lines = <FILE>;
+    @lines = sort @lines;
+    my $print;
+    foreach my $line (@lines) {
+        if ($line !~ /^\/export\//) { next; }
+        my @vs = split(' ',$line);
+        my $name = @vs[0];
+        my $ip = @vs[1];
+        $name =~ s/^\/export\///;
+        my $i = index($ip,'(');
+        $ip = substr($ip, 0, $i);
+        if (!defined ($rbd)) {
+            $print .= "$name $ip\n";
+        }
+        elsif ($rbd eq $name) {
+            $print .= "$name $ip\n";
+        }
+    }
+    close(FILE);
+    return $print;
+}
+
+
+
+sub help {
+    print <<EOF
+Usage:
+    $0 <command> <name>
+
+Command:
+    create  <name> :
+            Create a ceph block device, and export it via NFS
+
+    delete  <name> :
+            Delete the ceph block device and unexport it
+
+    export  [name] :
+            Prints a list of exports of ceph block device if given
+
+            <name> <ip> :
+            Export ceph block device to ip
+
+    unexport <name> <ip> :
+            Show the NFS share with options
+
+    list        Lists the ceph block devices
+
+Examples:
+    $0 create nfsdev 150
+        Create a ceph block device with name nfsdev and size 150MB and export it
+        via NFS
+    $0 export
+        Prints a list of all exports
+    $0 export nfsdev 172.26.188.25
+        Export ceph block device nfsdev to 172.26.188.25
+    $0 unexport nfsdev 172.26.188.25
+        Unexport ceph block device nfsdev to 172.26.188.25
+EOF
+}
+
+

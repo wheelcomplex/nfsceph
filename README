@@ -1,0 +1,1 @@
+nfsceph is a bunch of scripts that creates ceph rbds and mounts them via NFS.
