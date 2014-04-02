@@ -2,7 +2,7 @@
 
 # config file
 CONFIG=/etc/sysconfig/nfsceph
-BIN=/usr/bin/nfscephbin
+BIN=/usr/sbin/nfscephbin
 
 if [ ! -f "$CONFIG" ]; then
     echo "Error: cannot find config file" 

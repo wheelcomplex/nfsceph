@@ -58,17 +58,19 @@ elsif ($command eq "unexport") {
     my $ip = shift;
     unexport($name, $ip);
 }
-elsif ($command eq "exportall") {
-    exportall();
+elsif ($command eq "map") {
+    my $name = shift;
+    mapmount($name);
 }
-elsif ($command eq "unexportall") {
-    unexportall();
+elsif ($command eq "unmap") {
+    my $name = shift;
+    unmapmount($name);
 }
-elsif ($command eq "mountall") {
-    mountall();
+elsif ($command eq "mapall") {
+    mapall();
 }
-elsif ($command eq "umountall") {
-    umountall();
+elsif ($command eq "unmapall") {
+    unmapall();
 }
 elsif ($command eq "list") {
     list();
@@ -92,10 +94,13 @@ sub rbd_exists {
 # returns a device mapped to rbd
 sub getmapped {
     my $name = shift;
-    my $rbds = decode_json(`rbd --format json --pool $POOL --id $USER --keyring $KEYRING showmapped`);
-    foreach my $rbd (values %{$rbds}) {
-        if ($name eq $rbd->{'name'}) {
-            return $rbd->{'device'};
+    my $json = `rbd --format json --pool $POOL --id $USER --keyring $KEYRING showmapped 2> /dev/null`;
+    if ($json) {
+        my $rbds = decode_json($json);
+        foreach my $rbd (values %{$rbds}) {
+            if ($name eq $rbd->{'name'}) {
+                return $rbd->{'device'};
+            }
         }
     }
     return undef;
@@ -104,10 +109,29 @@ sub getmapped {
 
 sub list {
     my $ls = decode_json(`rbd --format json --pool $POOL --id $USER --keyring $KEYRING ls -l`);
-    #print Dumper $ls;
-    my $showmapped = decode_json(`rbd --format json --pool $POOL --id $USER --keyring $KEYRING showmapped`);
-    #print Dumper $showmapped;
 
+    my $json = `rbd --format json --pool $POOL --id $USER --keyring $KEYRING showmapped 2> /dev/null`;
+
+    # get list of all mount
+    my $mounts;
+    my $out = `mount | grep '^/dev/rbd'`;
+    my @ms = split /\n/, $out;
+    foreach my $m (@ms) {
+        my @i = split / /,$m;
+        $mounts->{$i[0]} = $i[2];
+    }
+
+    my $map;
+    if ($json) {
+        my $rbds = decode_json($json);
+        foreach my $rbd (values %{$rbds}) {
+            $map->{$rbd->{'name'}}->{'device'} = $rbd->{'device'};
+            $map->{$rbd->{'name'}}->{'mount'} = $mounts->{$rbd->{'device'}};
+        }
+    }
+
+    printf ("%-20s %-10s %s\n",'NAME','SIZE', 'MOUNT');
+    printf ("%-20s %-10s %s\n",'----','----', '-----');
     foreach my $rbd (@{$ls}) {
         #print Dumper $rbd;
         my $name = $rbd->{'image'};
@@ -117,7 +141,7 @@ sub list {
         if ($size > 1000000000) { $size = $size / 1000000000; $u = "PB"; }
         elsif ($size > 1000000) { $size = $size / 1000000; $u = "TB"; }
         elsif ($size > 1000) { $size = $size / 1000; $u = "GB"; }
-        printf ("%-20s %s $u\n",$name,$size);
+        printf ("%-20s %6.2f $u  %s\n", $name, $size, $map->{$name}->{'mount'});
     }
     return 0;
 
@@ -137,7 +161,6 @@ sub create {
     if ($? == 0) { print "Success.\n"; }
     else { print "Error.\n"; exit 1; }
 
-
     print "Mapping rbd...";
     system("rbd --pool $POOL --id $USER --keyring $KEYRING map $name");
     if ($? == 0) { print "Success.\n"; }
@@ -154,6 +177,17 @@ sub create {
     system("mount $device $MOUNT/$name");
     if ($? == 0) { print "Success.\n"; }
     else { print "Error.\n"; exit 1; }
+
+    print "Unmounting filesystem...";
+    system("umount $MOUNT/$name");
+    rmdir("$MOUNT/$name");
+    if ($? == 0) { print "Success.\n"; }
+    else { print "Error.\n"; exit 1; }
+
+    print "Unmapping rbd... ";
+    system("rbd --pool $POOL --id $USER --keyring $KEYRING unmap $device");
+    if ($? == 0) { print "Success.\n"; }
+    else { print "Error.\n"; exit 1; }
 }
 
 sub remove {
@@ -166,29 +200,63 @@ sub remove {
         print "Error! rbd $name does not exist.\n";
         exit 1;
     }
+
     my $device = getmapped($name);
-
-    if (!defined($device)) {
-        print "Error! rbd $name does not have a mapped device.\n";
-        print "Please delete rbd manually. See man rdb for more help.\n";
-        exit 1;
+    if ($device) {
+        print "Error! device $name is still mapped.\n";
     }
-
-    print "Unmounting filesystem...";
-    system("umount $MOUNT/$name");
-    rmdir("$MOUNT/$name");
-    if ($? == 0) { print "Success.\n"; }
-    else { print "Error.\n"; exit 1; }
-
-    print "Unmapping rbd... ";
-    system("rbd --pool $POOL --id $USER --keyring $KEYRING unmap $device");
-    if ($? == 0) { print "Success.\n"; }
-    else { print "Error.\n"; exit 1; }
 
     print "Deleting rbd... ";
     system("rbd --pool $POOL --id $USER --keyring $KEYRING rm $name");
     if ($? == 0) { print "Success.\n"; }
     else { print "Error.\n"; exit 1; }
+}
+
+
+# map and mount
+sub mapmount {
+    my $name = shift;
+
+    my $rv = _rbd_lock($name);
+    if ($rv != 0) { exit 1; }
+
+    print "Mapping rbd $name...";
+    system("rbd --pool $POOL --id $USER --keyring $KEYRING map $name");
+    if ($? == 0) { print "Success.\n"; }
+    else { print "Error.\n"; return; }
+
+    print "Mounting filesystem $MOUNT/$name...";
+    my $device = getmapped($name);
+    if (! -d "$MOUNT") { mkdir ("$MOUNT", 755); }
+    if (! -d "$MOUNT/$name") { mkdir ("$MOUNT/$name", 755); }
+    system("mount $device $MOUNT/$name");
+    if ($? == 0) { print "Success.\n"; }
+    else { print "Error.\n"; return; }
+}
+
+# unmap and umount
+sub unmapmount {
+    my $name = shift;
+    my $device = getmapped($name);
+
+    _rbd_unlock($name);
+
+    if (!defined($device)) {
+        print "Error! rbd $name does not have a mapped device.\n";
+        print "Please delete rbd manually. See man rdb for more help.\n";
+        return;
+    }
+
+    print "Unmounting filesystem $MOUNT/$name...";
+    system("umount $MOUNT/$name");
+    rmdir("$MOUNT/$name");
+    if ($? == 0) { print "Success.\n"; }
+    else { print "Error. You might need to unexport NFS shares first.\n"; return; }
+
+    print "Unmapping rbd $name...";
+    system("rbd --pool $POOL --id $USER --keyring $KEYRING unmap $device");
+    if ($? == 0) { print "Success.\n"; }
+    else { print "Error.\n"; return; }
 }
 
 # adds an export if given $ip, print out list of exports if not
@@ -200,6 +268,7 @@ sub export {
         return;
     }
     system "exportfs -o rw,async,no_root_squash $ip:/export/$name";
+    system "exportfs -v > /etc/exports";
 }
 
 
@@ -209,6 +278,7 @@ sub unexport {
     my $ip = shift;
     if (!defined($ip) || !defined($name)) { help(); exit 3; }
     system "exportfs -u $ip:/export/$name";
+    system "exportfs -v > /etc/exports";
 }
 
 sub exportall {
@@ -241,24 +311,63 @@ sub unexportall {
     close(FILE);
 }
 
-sub mountall {
-    my $ls = decode_json(`rbd --format json --pool $POOL --id $USER --keyring $KEYRING ls`);
-    foreach my $name (@{$ls}) {
-        system("rbd --pool $POOL --id $USER --keyring $KEYRING map $name");
-        my $device = getmapped($name);
-        system("mount $device $MOUNT/$name");
+sub mapall {
+    open(FILE, "< /etc/exports");
+    my @lines = <FILE>;
+    foreach my $line (@lines) {
+        my @vs = split(' ',$line);
+        my $name = @vs[0];
+        my $ip = @vs[1];
+        my @rs = split('/',$name);
+        my $rbd = @rs[2];
+        if (! getmapped($rbd)) {
+            mapmount($rbd);
+        }
+    }
+    close(FILE);
+}
+
+sub unmapall {
+    my $json = `rbd --format json --pool $POOL --id $USER --keyring $KEYRING showmapped 2> /dev/null`;
+    if ($json) {
+        my $maps = decode_json($json);
+        foreach my $map (values %{$maps}) {
+            unmapmount($map->{'name'});
+        }
     }
 }
 
-sub umountall {
-    my $ls = decode_json(`rbd --format json --pool $POOL --id $USER --keyring $KEYRING ls`);
-    foreach my $name (@{$ls}) {
-        my $device = getmapped($name);
-        system("umount $device");
-        system("rbd --pool $POOL --id $USER --keyring $KEYRING unmap $device");
+# lock a image
+sub _rbd_lock {
+    my $rbd = shift;
+    my $lock = decode_json(`rbd --format json --pool $POOL --id $USER --keyring $KEYRING lock list $rbd`);
+    if (%{$lock}) {
+        my $lockhost = (keys %{$lock})[0];
+        warn "Error: image $rbd is already mapped by $lockhost\n";
+        return -1;
+    }
+    else {
+        my $hostname = `hostname`;
+        system(`rbd --pool $POOL --id $USER --keyring $KEYRING lock add $rbd $hostname`);
+        return 0;
     }
 }
-    
+
+# unlock a image
+sub _rbd_unlock {
+    my $rbd = shift;
+    my $lock = decode_json(`rbd --format json --pool $POOL --id $USER --keyring $KEYRING lock list $rbd`);
+    if (%{$lock}) {
+        my $hostname = `hostname`;
+        chomp $hostname;
+        my $id = $lock->{"$hostname"}->{'locker'};
+        #print("rbd --pool $POOL --id $USER --keyring $KEYRING lock remove $rbd $hostname $id");
+        system(`rbd --pool $POOL --id $USER --keyring $KEYRING lock remove $rbd $hostname $id`);
+        return 0;
+    }
+    return -1;
+}
+
 # helper function to print out a list of exports 
 sub _export_print {
     my $rbd = shift;
@@ -299,23 +408,27 @@ Command:
     delete  <name> :
             Delete the ceph block device and unexport it
 
-    export  [name] :
-            Prints a list of exports of ceph block device if given
+    map  [name] :
+            Maps and rbd and mounts it
 
-            <name> <ip> :
-            Export ceph block device to ip
+    unmap  [name] :
+            Umount and unmap rbd
 
-    unexport <name> <ip> :
-            Show the NFS share with options
+    export [name] [ip / hostname] :
+            Export ceph block device to IP or hostname
 
-    list        Lists the ceph block devices
+    unexport [name] [ip / hostname] :
+            Unexport ceph block device to IP or hostname
+
+    list
+            Lists the ceph block devices
 
 Examples:
     $0 create nfsdev 150
         Create a ceph block device with name nfsdev and size 150MB and export it
         via NFS
-    $0 export
-        Prints a list of all exports
+    $0 map nfsdev
+        Map and mount nfsdev
     $0 export nfsdev 172.26.188.25
         Export ceph block device nfsdev to 172.26.188.25
     $0 unexport nfsdev 172.26.188.25

@@ -1,6 +1,6 @@
 #!/bin/bash
 #
-# chkconfig: - 35 50
+# chkconfig: - 25 65
 # description: sets up nfsceph file shares
 
 ### BEGIN INIT INFO
@@ -14,17 +14,16 @@
 
 prog=nfsceph
 lockfile=/var/lock/subsys/$prog
-nfsceph=/usr/bin/$prog
+nfsceph=/usr/sbin/$prog
 
-[ -f /usr/bin/nfsceph ] || exit 1
+[ -f $nfsceph ] || exit 1
 [ -f /etc/sysconfig/nfsceph ] || exit 2
 
 . /etc/sysconfig/nfsceph
 
 start() {
 	echo -n $"Starting nfsceph: "
-    $nfsceph mountall &> /dev/null
-    $nfsceph exportall &> /dev/null
+    $nfsceph mapall &> /dev/null
 	RETVAL=$?
 	[ $RETVAL -eq 0 ] && success || failure
 	echo
@@ -38,12 +37,8 @@ status() {
 }
 
 stop() {
-    # save config first
-    [ $SAVE_CONFIG == "yes" ] && $nfsceph export > $EXPORTS
-
 	echo -n $"Stopping nfsceph: "
-    /usr/bin/nfsceph unexportall &> /dev/null
-    /usr/bin/nfsceph umountall &> /dev/null
+    $nfsceph unmapall &> /dev/null
 	RETVAL=$?
 	[ $RETVAL -eq 0 ] && success || failure
 	rm -f $lockfile
@@ -54,6 +49,10 @@ stop() {
 restart() {
 	stop
     start
+}
+
+save() {
+    $nfsceph export > $EXPORTS
 }
 
 # See how we were called.
@@ -67,11 +66,14 @@ case "$1" in
   status)
 	status
 	;;
+  save)
+	save
+	;;
   restart|force-reload)
 	stop
 	start
 	;;
   *)
-	echo $"Usage: $0 {start|stop|status|restart|force-reload}"
+	echo $"Usage: $0 {start|stop|status|restart|force-reload|save}"
 	exit 2
 esac
