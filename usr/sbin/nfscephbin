@@ -18,6 +18,8 @@ my $KEYRING = $ENV{'NFSCEPH_KEYRING'} || "/etc/ceph/ceph.keyring";
 my $MOUNT = $ENV{'NFSCEPH_MOUNT'} || "/export";
 # export config
 my $EXPORTS = $ENV{'NFSCEPH_EXPORTS'} || "/etc/sysconfig/nfsceph-exports";
+# export filesystem type(ext3/ext4/xfs)
+my $FSTYPE = $ENV{'NFSCEPH_FSTYPE'} || "ext4";
 
 if ($#ARGV < 0) { help(); }
 
@@ -169,9 +171,9 @@ sub create {
     if ($? == 0) { print "Success.\n"; }
     else { print "Error.\n"; exit 1; }
 
-    print "Making filesystem...";
+    print "Making $FSTYPE filesystem...";
     my $device = getmapped($name);
-    system("mkfs.ext3 $device");
+    system("mkfs.$FSTYPE $device");
     if ($? == 0) { print "Success.\n"; }
     else { print "Error.\n"; exit 1; }
 
@@ -228,11 +230,11 @@ sub mapmount {
     if ($? == 0) { print "Success.\n"; }
     else { print "Error.\n"; return; }
 
-    print "Mounting filesystem $MOUNT/$name...";
+    print "Mounting $FSTYPE filesystem $MOUNT/$name...";
     my $device = getmapped($name);
     if (! -d "$MOUNT") { mkdir ("$MOUNT", 755); }
     if (! -d "$MOUNT/$name") { mkdir ("$MOUNT/$name", 755); }
-    system("mount -t ext3 $device $MOUNT/$name");
+    system("mount -t $FSTYPE $device $MOUNT/$name");
     if ($? == 0) { print "Success.\n"; }
     else { print "Error.\n"; return; }
 }

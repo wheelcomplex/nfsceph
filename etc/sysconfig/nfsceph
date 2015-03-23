@@ -9,3 +9,6 @@ KEYRING="/etc/ceph/ceph.keyring";
 
 # mountpoint for exports
 MOUNT="/export";
+
+# filesystem type
+FSTYPE="ext4"

@@ -1,0 +1,79 @@
+#!/bin/bash
+#
+# chkconfig: - 25 65
+# description: sets up nfsceph file shares
+
+### BEGIN INIT INFO
+# Provides: nfsceph
+# Short-Description: sets up nfsceph file shares
+# Description: sets up nfsceph file shares
+### END INIT INFO
+
+# Source function library.
+. /etc/init.d/functions
+
+prog=nfsceph
+lockfile=/var/lock/subsys/$prog
+nfsceph=/usr/sbin/$prog
+
+[ -f $nfsceph ] || exit 1
+[ -f /etc/sysconfig/nfsceph ] || exit 2
+
+. /etc/sysconfig/nfsceph
+
+start() {
+	echo -n $"Starting nfsceph: "
+    $nfsceph mapall &> /dev/null
+	RETVAL=$?
+	[ $RETVAL -eq 0 ] && success || failure
+	echo
+    touch $lockfile
+	return $RETVAL
+}
+
+status() {
+#	[ -f $lockfile ] || exit 3
+    $nfsceph export
+}
+
+stop() {
+	echo -n $"Stopping nfsceph: "
+    $nfsceph unmapall &> /dev/null
+	RETVAL=$?
+	[ $RETVAL -eq 0 ] && success || failure
+	rm -f $lockfile
+	echo
+	return $RETVAL
+}
+
+restart() {
+	stop
+    start
+}
+
+save() {
+    $nfsceph export > $EXPORTS
+}
+
+# See how we were called.
+case "$1" in
+  start)
+	start
+	;;
+  stop)
+	stop
+	;;
+  status)
+	status
+	;;
+  save)
+	save
+	;;
+  restart|force-reload)
+	stop
+	start
+	;;
+  *)
+	echo $"Usage: $0 {start|stop|status|restart|force-reload|save}"
+	exit 2
+esac
