@@ -1,0 +1,10 @@
+Package: nfsceph
+Version: 1.0-1
+Section: base
+Priority: optional
+Architecture: all
+Depends: ceph (>= 0.80.9), nfs-kernel-server (>= 1:1.2.6), rpcbind (>= 0.2.0)
+Maintainer: Wheelcomplex Yin <wheelcomplex@gmail.com>
+Description: nfsceph
+    Enable NFS for Ceph distributed file system services
+

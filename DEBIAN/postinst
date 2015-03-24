@@ -1,0 +1,4 @@
+#!/bin/bash
+PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+set -e
+update-rc.d -f nfsceph start 04 2 3 4 5 . stop 01 0 1 6 .

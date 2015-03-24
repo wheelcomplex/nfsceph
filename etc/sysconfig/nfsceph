@@ -1,14 +1,14 @@
 # ceph pool
-POOL="userfs";
+POOL="nfsceph";
 
 # ceph user
-USER="nfs";
+USER="admin";
 
 # ceph keyfile
-KEYRING="/etc/ceph/ceph.keyring";
+KEYRING="/etc/ceph/ceph.client.admin.keyring";
 
 # mountpoint for exports
-MOUNT="/export";
+MOUNT="/var/lib/nfsceph";
 
 # filesystem type
 FSTYPE="ext4"
