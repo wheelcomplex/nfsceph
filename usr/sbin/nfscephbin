@@ -272,7 +272,7 @@ sub export {
         print _export_print($name);
         return;
     }
-    system "exportfs -o rw,async,no_root_squash $ip:/export/$name";
+    system "exportfs -o rw,async,no_root_squash $ip:$MOUNT/$name";
     # saves the current exports
     system "cp -f /var/lib/nfs/etab /etc/exports"
 }
@@ -283,7 +283,7 @@ sub unexport {
     my $name = shift;
     my $ip = shift;
     if (!defined($ip) || !defined($name)) { help(); exit 3; }
-    system "exportfs -u $ip:/export/$name";
+    system "exportfs -u $ip:$MOUNT/$name";
     # saves the current exports
     system "cp -f /var/lib/nfs/etab /etc/exports"
 }
@@ -296,7 +296,7 @@ sub exportall {
         my $name = @vs[0];
         my $ip = @vs[1];
         print "Exporting $name... ";
-        system "exportfs -o rw,async,no_root_squash $ip:/export/$name\n";
+        system "exportfs -o rw,async,no_root_squash $ip:$MOUNT/$name\n";
         if ($? == 0) { print "Success.\n"; }
         else { print "Error.\n"; }
     }
@@ -311,7 +311,7 @@ sub unexportall {
         my $name = @vs[0];
         my $ip = @vs[1];
         print "Unexporting $name... ";
-        system "exportfs -u $ip:/export/$name\n";
+        system "exportfs -u $ip:$MOUNT/$name\n";
         if ($? == 0) { print "Success.\n"; }
         else { print "Error.\n"; }
     }
@@ -385,11 +385,11 @@ sub _export_print {
     @lines = sort @lines;
     my $print;
     foreach my $line (@lines) {
-        if ($line !~ /^\/export\//) { next; }
+        if ($line !~ /^$MOUNT\//) { next; }
         my @vs = split(' ',$line);
         my $name = @vs[0];
         my $ip = @vs[1];
-        $name =~ s/^\/export\///;
+        $name =~ s/^$MOUNT\///;
         my $i = index($ip,'(');
         $ip = substr($ip, 0, $i);
         if (!defined ($rbd)) {
